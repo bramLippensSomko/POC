@@ -1,0 +1,16 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: [ "master", "qa" , "main"]
+
+  workflow_dispatch:
+
+jobs:
+  call-build-workflow:
+    name: Build Docker Image
+    uses: Somko/reusable-workflows/.github/workflows/reusable-image-build.yml@main
+    with:
+      repo-name: ${{ github.event.repository.name }}
+      branch-name: ${{ github.ref_name }}
+      trigger-hash: ${{ github.sha }}

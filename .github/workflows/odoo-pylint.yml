@@ -1,0 +1,14 @@
+name: Code Quality Check
+
+on:
+  pull_request:
+    branches: [ "master", "qa" , "main", "release/*" ]
+
+  workflow_dispatch:
+
+jobs:
+  call-code-quality-workflow:
+    uses: Somko/reusable-workflows/.github/workflows/odoo-pylint.yml@main
+    with:
+      repo-name: ${{ github.event.repository.name }}
+      branch-name: ${{ github.head_ref }}

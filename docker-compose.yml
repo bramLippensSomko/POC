@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:16.7
+    environment:
+      - POSTGRES_USER=odoo
+      - POSTGRES_PASSWORD=odoo
+      - POSTGRES_DB=postgres
+    ports:
+    # Local port mapping for debugging
+      - 7854:5432
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  odoo:
+    build: .
+    environment:
+      - SOMKOENV=DEV
+    links:
+      - db
+    ports:
+    # Local port mapping for development
+      - 9563:8069
+    volumes:
+      - ./custom:/mnt/repo/custom
+      - ./third:/mnt/repo/third
+      - odoo-data:/var/lib/odoo
+
+  jupyter:
+    image: jupyter/datascience-notebook
+    restart: no
+    volumes:
+      - ./data-import:/home/jovyan/work:rw
+    ports:
+      - 8888:8888
+
+  maildev:
+    image: maildev/maildev
+    restart: no
+    ports:
+      - 1025:1025
+      - 1080:1080
+
+volumes:
+  odoo-data:
+  db-data:
