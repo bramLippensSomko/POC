@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<odoo>
+    <record id="copy_phone_to_mobile" model="ir.actions.server">
+        <field name="name">Run AI Helpdesk Ticket Analysis and Update</field>
+        <field name="model_id" ref="custom_helpdesk_ai.model_helpdesk_ticket"/>
+        <field name="binding_model_id" ref="custom_helpdesk_ai.model_helpdesk_ticket"/>
+        <field name="binding_view_types">list</field>
+        <field name="state">code</field>
+        <field name="code">
+if record:
+    try:
+        # Call the combined analysis and update method defined in the model
+        _logger.info(f"Server Action triggered for AI analysis on ticket {record.id}")
+        record.action_analyze_ticket_and_update()
+        log(f"Successfully executed AI analysis and update action for ticket {record.id}.")  # Use log() for user-visible logs if needed
+
+    except exceptions.UserError as ue:
+        # Re-raise UserErrors to show them in the UI
+        _logger.warning(f"UserError during AI analysis server action for ticket {record.id}: {ue}")
+        raise ue
+    except Exception as e:
+        _logger.error(f"Error executing AI analysis server action for ticket {record.id}: {e}", exc_info=True)
+        # Optionally raise a UserError to inform the user about the failure
+        raise exceptions.UserError(f"An unexpected error occurred during AI analysis for ticket {record.id}. Please contact support.")
+else:
+    _logger.warning("AI Analysis Server Action triggered but no record found.")
+        </field>
+    </record>
+</odoo>

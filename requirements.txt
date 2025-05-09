@@ -1,2 +1,15 @@
+# Odoo Core Dependencies (usually handled by Odoo install)
+#...
 pydevd-odoo
 ipython
+# AI Frameworks & LLM SDKs
+langchain>=0.1.0,<0.2.0
+langchain-openai>=0.1.0,<0.2.0 # Or other provider SDK
+langchain-google-genai
+google-generativeai
+# llama-index>=0.10.0,<0.11.0 # Uncomment if using LlamaIndex
+# llama-index-llms-openai>=0.1.0,<0.2.0 # Uncomment if using LlamaIndex with OpenAI
+pydantic>=2.0.0,<3.0.0
+requests>=2.20.0,<3.0.0
+python-dotenv>=1.0.0,<2.0.0
+openai

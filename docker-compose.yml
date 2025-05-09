@@ -13,6 +13,8 @@ services:
 
   odoo:
     build: .
+    env_file:
+      - .env
     environment:
       - SOMKOENV=DEV
     links:
@@ -25,20 +27,20 @@ services:
       - ./third:/mnt/repo/third
       - odoo-data:/var/lib/odoo
 
-  jupyter:
-    image: jupyter/datascience-notebook
-    restart: no
-    volumes:
-      - ./data-import:/home/jovyan/work:rw
-    ports:
-      - 8888:8888
+#  jupyter:
+#    image: jupyter/datascience-notebook
+#    restart: no
+#    volumes:
+#      - ./data-import:/home/jovyan/work:rw
+#    ports:
+#      - 8888:8888
 
-  maildev:
-    image: maildev/maildev
-    restart: no
-    ports:
-      - 1025:1025
-      - 1080:1080
+#  maildev:
+#    image: maildev/maildev
+#    restart: no
+#    ports:
+#      - 1025:1025
+#      - 1080:1080
 
 volumes:
   odoo-data:

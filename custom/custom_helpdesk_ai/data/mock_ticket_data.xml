@@ -1,0 +1,16 @@
+<odoo>
+    <data noupdate="1">
+        <record id="mock_ticket_01" model="helpdesk.ticket">
+            <field name="name">Python Script Error After Update</field>
+            <field name="description">Getting a 'ModuleNotFoundError: no module named xyz_custom_report' in the custom Python script responsible for generating the monthly sales report. This started immediately after applying the latest Odoo patch yesterday evening. This is blocking our month-end closing process, need an urgent fix before EOD tomorrow.</field>
+        </record>
+        <record id="mock_ticket_02" model="helpdesk.ticket">
+            <field name="name">Printer Jamming Issue - 3rd Floor East Wing</field>
+            <field name="description">The network printer (identified as PRN-EAST-3F, model HP LaserJet Pro M404dn) in the East Wing on the 3rd floor keeps jamming repeatedly. We've tried clearing the paper path following the on-screen instructions and checked the paper type, but the issue recurs after printing just 2-3 pages. It's not stopping critical work, but it's causing disruption for the marketing team.</field>
+        </record>
+        <record id="mock_ticket_03" model="helpdesk.ticket">
+            <field name="name">Slow Network Access - London Office Shared Drive</field>
+            <field name="description">Multiple users (~20 people) in the London office are reporting extremely slow access times when trying to open or save files on the main shared network drive (\LON-FS01\Shared). This started about an hour ago (around 9:00 AM GMT). Internet access seems fine, it's specific to the file server. This is significantly impacting productivity for the affected teams.</field>
+        </record>
+    </data>
+</odoo>
