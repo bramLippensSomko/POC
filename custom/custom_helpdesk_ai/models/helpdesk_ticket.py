@@ -1,10 +1,15 @@
+import json
+
 from odoo import models, fields, api, _, exceptions
+import requests
 import os
 from dotenv import load_dotenv
+import asyncio
 
 import logging
 
 from odoo.addons.custom_helpdesk_ai.services.llm_connection import get_ai_analysis_chain, invoke_ai_analysis
+from odoo.addons.custom_helpdesk_ai.services.smartness_chain import get_smartness_chain
 
 _logger = logging.getLogger(__name__)
 
@@ -15,6 +20,23 @@ llm_api_key = os.environ.get("OPENAI_API_KEY")
 if not llm_api_key:
     # Log an error or raise a configuration exception
     _logger.error("LLM API Key not found in environment variables.")
+
+
+def call_local_llm_api(subject, description, user_data):
+    try:
+        response = requests.post(
+            "http://localhost:1234/analyze_ticket",
+            json={
+                "subject": subject,
+                "description": description,
+                "users": user_data,
+                },
+            timeout=10,
+            )
+        return response.json()
+    except Exception as e:
+        _logger.error(f"LLM API call failed: {e}")
+        return None
 
 
 class HelpdeskTicket(models.Model):
@@ -28,6 +50,7 @@ class HelpdeskTicket(models.Model):
         ('Urgent', 'Urgent')], string='AI Priority', readonly=True, tracking=True)
     ai_required_skill = fields.Char(string='AI Required Skill', readonly=True, tracking=True)
     ai_suggested_user_id = fields.Many2one('res.users', string='AI Suggested Assignee', readonly=True, tracking=True)
+    ai_related_tickets = fields.Text(string="AI Related Tickets", tracking=True, readonly=True)
 
     # --- Cached Langchain Chain ---
     _ai_analysis_chain = None
@@ -45,70 +68,141 @@ class HelpdeskTicket(models.Model):
                 HelpdeskTicket._ai_analysis_chain = False
         return HelpdeskTicket._ai_analysis_chain if HelpdeskTicket._ai_analysis_chain else None
 
-    def run_ai_ticket_analysis(self):
-        """
-        Runs the AI analysis on the ticket description and returns the structured result.
-        This method is designed to be called by a server action or button.
-        Returns: A dictionary representation of TicketAnalysisResult or None if analysis fails.
-        """
+    def run_full_ai_ticket_analysis(self):
         self.ensure_one()
-        analysis_result_dict = None
-        _logger.info(f"Starting AI analysis for ticket ID {self.id} ('{self.name}')")
+
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise exceptions.UserError("Missing API key for Gemini.")
+
+        # --- Step 1: SMART analysis ---
+        smart_chain = asyncio.run(get_smartness_chain(api_key))
+        try:
+            smart_result = smart_chain.invoke({
+                "subject": self.name or "",
+                "description": self.description or "",
+                })
+            # You can persist or log smart_result if desired
+        except Exception as e:
+            _logger.warning(f"SMART analysis failed: {e}")
+            return  # Skip further analysis
+
+        # --- Check SMARTness ---
+        met_count = sum(
+            1 for k, v in smart_result.dict().items()
+            if v['status'].lower() == 'met'
+            )
+        if met_count < 3:
+            _logger.info(f"Ticket {self.id} is not SMART enough (only {met_count}/5 criteria met). Skipping AI assignment.")
+            return
+
+        # --- Step 2: Standard AI analysis ---
+        users = self.team_id.member_ids
+        user_data = [
+            {
+                "id": user.id,
+                "name": user.name,
+                "skills": [s.strip() for s in (user.skills or "").lower().split(",") if s.strip()]
+                }
+            for user in users if user.skills
+            ]
 
         chain = self._get_cached_ai_analysis_chain()
-        if not chain:
-            _logger.error(f"AI analysis chain unavailable for ticket {self.id}.")
-            raise exceptions.UserError("AI Analysis Service is not configured or unavailable.")
+        result = invoke_ai_analysis(chain, self.name, self.description, user_data)
 
-        # Invoke the analysis using the helper function
-        analysis_pydantic_obj = invoke_ai_analysis(chain, self.name, self.description)
+        if not result:
+            return
 
-        if analysis_pydantic_obj:
-            # Convert Pydantic object to dictionary for easier handling in Odoo
-            analysis_result_dict = analysis_pydantic_obj.dict()
-            _logger.info(f"AI analysis successful for ticket {self.id}. Raw results: {analysis_result_dict}")
-            self.ai_category = analysis_result_dict.get('category')
-            self.ai_priority = analysis_result_dict.get('priority')
-            self.ai_required_skill = analysis_result_dict.get('required_skill')
-        else:
-            # Error logging already happened within invoke_ai_analysis
-            _logger.warning(f"AI analysis did not return results for ticket {self.id}.")
-            raise exceptions.UserError("AI Analysis failed to produce results for this ticket.")
+        update_vals = {
+            'ai_category': result.get('category'),
+            'ai_priority': result.get('priority'),
+            'ai_required_skill': result.get('required_skill'),
+            }
+
+        # --- Step 3: Auto-assign based on skill ---
+        if result.get("required_skill"):
+            candidates = self.env['res.users'].search([])  # Later filter by skill
+            for user in candidates:
+                if result["required_skill"].lower() in (user.groups_id.mapped('name') + [user.name.lower()]):
+                    update_vals['ai_suggested_user_id'] = user.id
+                    break
+
+        self.write(update_vals)
+        self.message_post(body=f"AI Analysis completed. SMART ticket.\nAssigned values: {update_vals}")
 
     def action_analyze_ticket_and_update(self):
-        """Button action or server action target to run analysis and update the ticket."""
         for ticket in self:
-            analysis_data = ticket.run_ai_ticket_analysis()
-            if analysis_data:
-                update_vals = {}
-                # --- Mapping Logic ---
-                # Simple mapping for selection fields assuming values match
-                if analysis_data.get('category'):
-                    update_vals['ai_category'] = analysis_data['category']
-                if analysis_data.get('priority') in dict(self._fields['ai_priority'].selection):
-                    update_vals['ai_priority'] = analysis_data['priority']
-                if analysis_data.get('required_skill'):
-                    update_vals['ai_required_skill'] = analysis_data['required_skill']
+            users_data = [{
+                "id": user.id,
+                "name": user.name,
+                "skills": [s.strip() for s in (user.skills or "").lower().split(",") if s.strip()]
+                } for user in ticket.team_id.member_ids if user.skills]
 
-                # Example: Find suggested user based on skill (requires users to have skills defined)
-                # This is a simplified example; real logic might be more complex
-                # if analysis_data.get('required_skill'):
-                #    # Assuming a 'skill_ids' Many2many field on res.users and a 'res.skill' model
-                #    skill_name = analysis_data.get('required_skill')
-                #    # Search for users with that skill, perhaps prioritizing by availability/workload
-                #    suggested_user = self.env['res.users'].search([('skill_ids.name', '=ilike', skill_name)], limit=1)
-                #    if suggested_user:
-                #        update_vals['ai_suggested_user_id'] = suggested_user.id
-                #        _logger.info(f"Suggested assignee for ticket {ticket.id}: {suggested_user.name}")
+            payload = {
+                "ticket_id": ticket.id,
+                "subject": ticket.name or "",
+                "description": ticket.description or "",
+                "users": users_data
+                }
 
-                if update_vals:
-                    try:
-                        ticket.write(update_vals)
-                        _logger.info(f"Ticket {ticket.id} updated with AI analysis: {update_vals}")
-                        ticket.message_post(body=f"AI Analysis Completed: Category='{update_vals.get('ai_category', 'N/A')}', Priority='{update_vals.get('ai_priority', 'N/A')}', Skill='{update_vals.get('ai_required_skill', 'N/A')}'")
-                    except Exception as e:
-                        _logger.error(f"Failed to write AI analysis results to ticket {ticket.id}: {e}", exc_info=True)
-                else:
-                    _logger.info(f"No valid update values derived from AI analysis for ticket {ticket.id}.")
-            else:
-                _logger.warning(f"AI Analysis failed or returned no data for ticket {ticket.id}, skipping update.")
+            # Fire-and-forget call to FastAPI
+            try:
+                requests.post("http://172.17.0.1:1234/analyze_ticket", json=payload, timeout=2)
+                ticket.message_post(body="🧠 AI analysis request sent. Processing in background.")
+            except Exception as e:
+                _logger.error(f"Failed to send AI analysis request for ticket {ticket.id}: {e}")
+                ticket.message_post(body="❌ Failed to send AI analysis request.")
+
+
+
+    # def action_analyze_ticket_and_update(self):
+    #     for ticket in self:
+    #         try:
+    #             # Prepare payload for API
+    #             users_data = [
+    #                 {
+    #                     "id": user.id,
+    #                     "name": user.name,
+    #                     "skills": [s.strip() for s in (user.skills or "").lower().split(",") if s.strip()]
+    #                     }
+    #                 for user in ticket.team_id.member_ids if user.skills
+    #                 ]
+    #
+    #             payload = {
+    #                 "subject": ticket.name or "",
+    #                 "description": ticket.description or "",
+    #                 "users": users_data
+    #                 }
+    #
+    #             # Call your FastAPI server (adjust URL if needed)
+    #             response = requests.post("http://172.17.0.1:1234/analyze_ticket", json=payload)
+    #             response.raise_for_status()
+    #             result = response.json()
+    #
+    #             update_vals = {
+    #                 'ai_category': result.get('category'),
+    #                 'ai_priority': result.get('priority'),
+    #                 'ai_required_skill': result.get('required_skill'),
+    #                 'ai_related_tickets': json.dumps(result.get('related_tickets', [])),
+    #                 }
+    #
+    #             # Suggested user logic...
+    #
+    #             ticket.write(update_vals)
+    #
+    #             # Post message with a snippet of related tickets
+    #             related_preview = "\n".join(r['text'] for r in result.get('related_tickets', [])[:3])
+    #             ticket.message_post(
+    #                 body=(
+    #                     f"🧠 AI Analysis completed:<br/>"
+    #                     f"📂 Category: {update_vals.get('ai_category') or 'N/A'}<br/>"
+    #                     f"⚡ Priority: {update_vals.get('ai_priority') or 'N/A'}<br/>"
+    #                     f"🛠️ Skill: {update_vals.get('ai_required_skill') or 'N/A'}<br/>"
+    #                     f"👤 Suggested: {ticket.ai_suggested_user_id.name if ticket.ai_suggested_user_id else 'N/A'}<br/>"
+    #                     f"🔗 Related Tickets:<br/><pre>{related_preview}</pre>"
+    #                 )
+    #                 )
+    #
+    #         except requests.exceptions.RequestException as e:
+    #             _logger.error(f"Failed to call AI API for ticket {ticket.id}: {e}", exc_info=True)
+    #             ticket.message_post(body="❌ AI Analysis failed due to API error.")

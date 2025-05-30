@@ -1,4 +1,5 @@
 # This code would typically reside in a utility function or within the Odoo model method
+import json
 import logging
 
 from openai import RateLimitError
@@ -41,17 +42,20 @@ async def _get_ai_analysis_chain_async(api_key):
         temperature=0
         )
 
-    prompt_template = """Analyze the following helpdesk ticket subject and description. Based *only* on the provided text, determine the most appropriate category, estimate the priority level, and identify the primary technical skill likely required for resolution.
-
-Subject: {subject}
-Description: {description}
-
-Return only a JSON object with the following structure:
-{{ 
-  "category": "...",
-  "priority": "...",
-  "required_skill": "..."  // or null if not known
-}}"""
+    prompt_template = """
+    Analyze the following helpdesk ticket subject and description. Based *only* on the provided text, determine the most appropriate category, estimate the priority level, 
+    and identify the primary technical skill likely required for resolution.
+    
+    Subject: {subject}
+    Description: {description}
+    
+    Return only a JSON object with the following structure:
+    {{ 
+      "category": "...",
+      "priority": "...",
+      "required_skill": "..."  // or null if not known
+    }}
+    """
 
     prompt = ChatPromptTemplate.from_template(prompt_template)
     parser = JsonOutputParser(key=None)
@@ -59,7 +63,7 @@ Return only a JSON object with the following structure:
     return chain
 
 
-def invoke_ai_analysis(chain, ticket_subject, ticket_description, retries=5, delay=5):
+def invoke_ai_analysis(chain, ticket_subject, ticket_description, possible_users, retries=5, delay=5):
     """Invokes the Langchain chain and handles potential errors with retry logic."""
     if not chain:
         _logger.error("AI analysis chain is not available.")
@@ -73,9 +77,10 @@ def invoke_ai_analysis(chain, ticket_subject, ticket_description, retries=5, del
         try:
             _logger.info(f"Invoking AI analysis chain... Attempt {attempt + 1}")
             result = chain.invoke({
-                "subject": ticket_subject or "",  # Handle potentially empty subject
-                "description": ticket_description
-            })
+                "subject": ticket_subject or "",
+                "description": ticket_description,
+                "available_users_json": json.dumps(possible_users)
+                })
 
             _logger.info(f"AI analysis successful. Result: {result}")
             return result  # The result is a Pydantic object (TicketAnalysisResult)
@@ -97,10 +102,31 @@ def invoke_ai_analysis(chain, ticket_subject, ticket_description, retries=5, del
     return None
 
 
-# --- Example Usage (Conceptual - would be called from Odoo method) ---
-# my_chain = get_ai_analysis_chain(llm_api_key)
-# if my_chain:
-#    analysis_pydantic_obj = invoke_ai_analysis(my_chain, "Subject", "Description...")
-#    if analysis_pydantic_obj:
-#        analysis_dict = analysis_pydantic_obj.dict() # Convert to dictionary if needed
-#        print(analysis_dict)
+def analyze_ticket_smartness(chain, ticket_subject, ticket_description):
+    # Prompt engineering is key here. Use few-shot examples.
+    prompt = f"""
+    Analyze the following ticket, language can be English and Dutch based on SMART criteria. For each criterion (Specific, Measurable, Achievable, Relevant, Time-bound),
+    state if it is 'Met', 'Not Met', or 'Partially Met', and provide a brief reason.
+    Return the output as a JSON object with keys "specific", "measurable", "achievable", "relevant", "time_bound",
+    each having "status" and "reason" sub-keys.
+
+    Example Ticket 1:
+    Text: "User cannot login."
+    Output: {{"specific": {{"status": "Not Met", "reason": "Does not specify user, system, or error."}},...}}
+
+    Example Ticket 2:
+    Text: "The monthly sales report (ID: XYZ) is not generating data for the North region since June 1st. This blocks Q3 planning."
+    Output: {{"specific": {{"status": "Met", "reason": "Specifies report, issue, region, timeframe."}},...}}
+
+    Analyze this ticket:
+    Title: "{ticket_subject}"
+    Text: "{ticket_description}"
+    Output:
+    """
+    try:
+        response = chain.complete(prompt)
+        return response
+
+    except Exception as e:
+        print(f"Error during SMART analysis: {e}")
+        return {"error": str(e)}

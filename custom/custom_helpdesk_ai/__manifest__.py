@@ -12,6 +12,8 @@
 
         'data/mock_ticket_data.xml',
         'data/ir_action_data.xml',
+
+        'views/helpdesk_ticket.xml',
         ],
     'qweb': [],
     'demo': [],
